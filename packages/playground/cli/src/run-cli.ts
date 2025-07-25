@@ -546,6 +546,7 @@ export async function runCLI(args: RunCLIArgs): Promise<RunCLIServer> {
 					const bridge = await startBridge({
 						getPHPFile: async (path: string) =>
 							await playground!.readFileAsText(path),
+						excludedPaths: ['/internal'],
 					});
 
 					bridge.start();

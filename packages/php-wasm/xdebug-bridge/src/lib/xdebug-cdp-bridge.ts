@@ -28,6 +28,7 @@ export interface XdebugCDPBridgeConfig {
 	knownScriptUrls: string[];
 	remoteRoot?: string;
 	localRoot?: string;
+	excludedPaths?: string[];
 	getPHPFile(path: string): Promise<string>;
 }
 
@@ -48,6 +49,7 @@ export class XdebugCDPBridge {
 	private readPHPFile: (path: string) => Promise<string>;
 	private remoteRoot: string;
 	private localRoot: string;
+	private excludedPaths: string[];
 
 	constructor(
 		dbgp: DbgpSession,
@@ -59,6 +61,7 @@ export class XdebugCDPBridge {
 		this.readPHPFile = config.getPHPFile;
 		this.remoteRoot = config.remoteRoot || '';
 		this.localRoot = config.localRoot || '';
+		this.excludedPaths = config.excludedPaths || [];
 		for (const url of config.knownScriptUrls) {
 			this.scriptIdByUrl.set(url, this.getOrCreateScriptId(url));
 		}
@@ -138,7 +141,11 @@ export class XdebugCDPBridge {
 
 	private sendInitialScripts() {
 		// Send scriptParsed for the main file if not already sent
-		if (this.initFileUri && !this.scriptIdByUrl.has(this.initFileUri)) {
+		if (
+			this.initFileUri &&
+			!this.scriptIdByUrl.has(this.initFileUri) &&
+			!this.isExcludedPath(this.initFileUri)
+		) {
 			const scriptId = this.getOrCreateScriptId(this.initFileUri);
 			this.cdp.sendMessage({
 				method: 'Debugger.scriptParsed',
@@ -155,17 +162,25 @@ export class XdebugCDPBridge {
 
 		// Send every script we already know about
 		for (const [url, scriptId] of this.scriptIdByUrl.entries()) {
-			this.cdp.sendMessage({
-				method: 'Debugger.scriptParsed',
-				params: {
-					scriptId,
-					url,
-					startLine: 0,
-					startColumn: 0,
-					executionContextId: 1,
-				},
-			});
+			if (!this.isExcludedPath(url)) {
+				this.cdp.sendMessage({
+					method: 'Debugger.scriptParsed',
+					params: {
+						scriptId,
+						url,
+						startLine: 0,
+						startColumn: 0,
+						executionContextId: 1,
+					},
+				});
+			}
 		}
+	}
+
+	private isExcludedPath(fileUri: string): boolean {
+		return this.excludedPaths.some((prefix) =>
+			this.uriToRemotePath(fileUri).startsWith(prefix)
+		);
 	}
 
 	private getOrCreateScriptId(fileUri: string): string {
@@ -544,17 +559,23 @@ export class XdebugCDPBridge {
 					if (response['xdebug:message']) {
 						const fileUri = response['xdebug:message'].$.filename;
 						if (fileUri && !this.scriptIdByUrl.has(fileUri)) {
-							const scriptId = this.getOrCreateScriptId(fileUri);
-							this.cdp.sendMessage({
-								method: 'Debugger.scriptParsed',
-								params: {
-									scriptId,
-									url: fileUri,
-									startLine: 0,
-									startColumn: 0,
-									executionContextId: 1,
-								},
-							});
+							if (this.isExcludedPath(fileUri)) {
+								this.sendDbgpCommand('step_over');
+								break;
+							} else {
+								const scriptId =
+									this.getOrCreateScriptId(fileUri);
+								this.cdp.sendMessage({
+									method: 'Debugger.scriptParsed',
+									params: {
+										scriptId,
+										url: fileUri,
+										startLine: 0,
+										startColumn: 0,
+										executionContextId: 1,
+									},
+								});
+							}
 						}
 					}
 					if (status === 'break') {

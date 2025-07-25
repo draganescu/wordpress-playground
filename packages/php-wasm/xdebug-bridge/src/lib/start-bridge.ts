@@ -12,6 +12,7 @@ export type StartBridgeConfig = {
 	phpRoot?: string;
 	remoteRoot?: string;
 	localRoot?: string;
+	excludedPaths?: string[];
 
 	phpInstance?: PHP;
 	getPHPFile?: (path: string) => Promise<string>;
@@ -80,5 +81,6 @@ export async function startBridge(config: StartBridgeConfig) {
 		remoteRoot: config.remoteRoot,
 		localRoot: config.localRoot,
 		getPHPFile,
+		excludedPaths: config.excludedPaths,
 	});
 }
