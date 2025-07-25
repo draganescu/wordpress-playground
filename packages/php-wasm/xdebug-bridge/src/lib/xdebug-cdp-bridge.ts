@@ -29,7 +29,7 @@ export interface XdebugCDPBridgeConfig {
 	remoteRoot?: string;
 	localRoot?: string;
 	excludedPaths?: string[];
-	getPHPFile(path: string): Promise<string>;
+	getPHPFile(path: string): string | Promise<string>;
 }
 
 export class XdebugCDPBridge {
