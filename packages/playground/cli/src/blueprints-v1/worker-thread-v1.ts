@@ -11,7 +11,7 @@ import {
 } from '@php-wasm/universal';
 import { sprintf } from '@php-wasm/util';
 import { RecommendedPHPVersion } from '@wp-playground/common';
-import { bootWordPress } from '@wp-playground/wordpress';
+import { bootWordPress, bootRequestHandler } from '@wp-playground/wordpress';
 import { rootCertificates } from 'tls';
 import { jspi } from 'wasm-feature-detect';
 import { MessageChannel, type MessagePort, parentPort } from 'worker_threads';
@@ -23,16 +23,12 @@ export interface Mount {
 }
 
 export type WorkerBootOptions = {
-	wpVersion?: string;
-	phpVersion?: SupportedPHPVersion;
-	absoluteUrl: string;
+	php: SupportedPHPVersion;
+	siteUrl: string;
 	mountsBeforeWpInstall: Array<Mount>;
 	mountsAfterWpInstall: Array<Mount>;
-	wordPressZip?: ArrayBuffer;
-	sqliteIntegrationPluginZip?: ArrayBuffer;
 	firstProcessId: number;
 	processIdSpaceLength: number;
-	dataSqlPath?: string;
 	followSymlinks: boolean;
 	trace: boolean;
 	/**
@@ -44,7 +40,25 @@ export type WorkerBootOptions = {
 	 */
 	internalCookieStore?: boolean;
 	withXdebug?: boolean;
+	nativeInternalDirPath: string;
 };
+
+export type PrimaryWorkerBootOptions = WorkerBootOptions & {
+	wpVersion?: string;
+	wordPressZip?: ArrayBuffer;
+	sqliteIntegrationPluginZip?: ArrayBuffer;
+	dataSqlPath?: string;
+};
+
+interface WorkerBootRequestHandlerOptions {
+	siteUrl: string;
+	allow?: string;
+	php: SupportedPHPVersion;
+	firstProcessId: number;
+	processIdSpaceLength: number;
+	trace: boolean;
+	nativeInternalDirPath: string;
+}
 
 /**
  * Print trace messages from PHP-WASM.
@@ -104,10 +118,10 @@ export class PlaygroundCliBlueprintV1Worker extends PHPWorker {
 	}
 
 	async bootAsPrimaryWorker({
-		absoluteUrl,
+		siteUrl,
 		mountsBeforeWpInstall,
 		mountsAfterWpInstall,
-		phpVersion = RecommendedPHPVersion,
+		php = RecommendedPHPVersion,
 		wordPressZip,
 		sqliteIntegrationPluginZip,
 		firstProcessId,
@@ -117,7 +131,8 @@ export class PlaygroundCliBlueprintV1Worker extends PHPWorker {
 		trace,
 		internalCookieStore,
 		withXdebug,
-	}: WorkerBootOptions) {
+		nativeInternalDirPath,
+	}: PrimaryWorkerBootOptions) {
 		if (this.booted) {
 			throw new Error('Playground already booted');
 		}
@@ -135,8 +150,8 @@ export class PlaygroundCliBlueprintV1Worker extends PHPWorker {
 				};
 
 			const requestHandler = await bootWordPress({
-				siteUrl: absoluteUrl,
-				createPhpRuntime: async () => {
+				siteUrl,
+				createPhpRuntime: async (isPrimary) => {
 					const processId = nextProcessId;
 
 					if (nextProcessId < lastProcessId) {
@@ -146,11 +161,18 @@ export class PlaygroundCliBlueprintV1Worker extends PHPWorker {
 						nextProcessId = firstProcessId;
 					}
 
-					return await loadNodeRuntime(phpVersion, {
+					return await loadNodeRuntime(php, {
 						emscriptenOptions: {
 							fileLockManager: this.fileLockManager!,
 							processId,
 							trace: trace ? tracePhpWasm : undefined,
+							phpWasmInitOptions: isPrimary
+								? // Only pass a native /internal dir to the primary PHP process
+								  // because the secondary PHP process will proxy to it.
+								  {
+										nativeInternalDirPath,
+								  }
+								: {},
 						},
 						followSymlinks,
 						withXdebug,
@@ -202,7 +224,72 @@ export class PlaygroundCliBlueprintV1Worker extends PHPWorker {
 	}
 
 	async bootAsSecondaryWorker(args: WorkerBootOptions) {
-		return this.bootAsPrimaryWorker(args);
+		await this.bootRequestHandler(args);
+		const primaryPhp = this.__internal_getPHP()!;
+		// When secondary workers are spawned, WordPress is already installed.
+		await mountResources(primaryPhp, args.mountsBeforeWpInstall || []);
+		await mountResources(primaryPhp, args.mountsAfterWpInstall || []);
+	}
+
+	async bootRequestHandler({
+		siteUrl,
+		allow,
+		php,
+		firstProcessId,
+		processIdSpaceLength,
+		trace,
+		nativeInternalDirPath,
+	}: WorkerBootRequestHandlerOptions) {
+		if (this.booted) {
+			throw new Error('Playground already booted');
+		}
+		this.booted = true;
+
+		let nextProcessId = firstProcessId;
+		const lastProcessId = firstProcessId + processIdSpaceLength - 1;
+
+		try {
+			const requestHandler = await bootRequestHandler({
+				siteUrl,
+				createPhpRuntime: async () => {
+					const processId = nextProcessId;
+
+					if (nextProcessId < lastProcessId) {
+						nextProcessId++;
+					} else {
+						// We've reached the end of the process ID space. Start over.
+						nextProcessId = firstProcessId;
+					}
+
+					return await loadNodeRuntime(php!, {
+						emscriptenOptions: {
+							fileLockManager: this.fileLockManager!,
+							processId,
+							trace: trace ? tracePhpWasm : undefined,
+							ENV: {
+								DOCROOT: '/wordpress',
+							},
+							phpWasmInitOptions: {
+								nativeInternalDirPath,
+							},
+						},
+						followSymlinks: allow?.includes('follow-symlinks'),
+					});
+				},
+				sapiName: 'cli',
+				cookieStore: false,
+				spawnHandler: sandboxedSpawnHandlerFactory,
+			});
+			this.__internal_setRequestHandler(requestHandler);
+
+			const primaryPhp = await requestHandler.getPrimaryPhp();
+			await this.setPrimaryPHP(primaryPhp);
+
+			setApiReady();
+		} catch (e) {
+			setAPIError(e as Error);
+			throw e;
+		}
 	}
 
 	// Provide a named disposal method that can be invoked via comlink.

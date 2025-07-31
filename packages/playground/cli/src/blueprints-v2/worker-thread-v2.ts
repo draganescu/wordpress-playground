@@ -2,7 +2,12 @@ import { errorLogPath } from '@php-wasm/logger';
 import type { FileLockManager } from '@php-wasm/node';
 import { createNodeFsMountHandler, loadNodeRuntime } from '@php-wasm/node';
 import { EmscriptenDownloadMonitor } from '@php-wasm/progress';
-import type { PHP, RemoteAPI, SupportedPHPVersion } from '@php-wasm/universal';
+import type {
+	FileTree,
+	PHP,
+	RemoteAPI,
+	SupportedPHPVersion,
+} from '@php-wasm/universal';
 import {
 	PHPExecutionFailureError,
 	PHPResponse,
@@ -26,6 +31,7 @@ import { MessageChannel, type MessagePort, parentPort } from 'worker_threads';
 import type { Mount } from '../mounts';
 import { jspi } from 'wasm-feature-detect';
 import { type RunCLIArgs } from '../run-cli';
+import type { PhpIniOptions } from '@wp-playground/wordpress';
 
 async function mountResources(php: PHP, mounts: Mount[]) {
 	for (const mount of mounts) {
@@ -111,6 +117,7 @@ export type WorkerBootArgs = RunCLIArgs & {
 	processIdSpaceLength: number;
 	trace: boolean;
 	blueprint: BlueprintV2Declaration | ParsedBlueprintV2Declaration;
+	nativeInternalDirPath: string;
 };
 
 type WorkerRunBlueprintArgs = RunCLIArgs & {
@@ -120,11 +127,16 @@ type WorkerRunBlueprintArgs = RunCLIArgs & {
 
 interface WorkerBootRequestHandlerOptions {
 	siteUrl: string;
-	php: SupportedPHPVersion;
 	allow?: string;
+	php: SupportedPHPVersion;
+	phpIniEntries?: PhpIniOptions;
+	constants?: Record<string, string | number | boolean | null>;
+	createFiles?: FileTree;
 	firstProcessId: number;
 	processIdSpaceLength: number;
 	trace: boolean;
+	nativeInternalDirPath: string;
+	withXdebug?: boolean;
 }
 
 export class PlaygroundCliBlueprintV2Worker extends PHPWorker {
@@ -169,7 +181,22 @@ export class PlaygroundCliBlueprintV2Worker extends PHPWorker {
 	}
 
 	async bootAsPrimaryWorker(args: WorkerBootArgs) {
-		await this.bootRequestHandler(args);
+		const constants = {
+			WP_DEBUG: true,
+			WP_DEBUG_LOG: true,
+			WP_DEBUG_DISPLAY: false,
+		};
+		const requestHandlerOptions = {
+			...args,
+			createFiles: {
+				'/internal/shared/ca-bundle.crt': rootCertificates.join('\n'),
+			},
+			constants,
+			phpIniEntries: {
+				'openssl.cafile': '/internal/shared/ca-bundle.crt',
+			},
+		};
+		await this.bootRequestHandler(requestHandlerOptions);
 
 		const primaryPhp = this.__internal_getPHP()!;
 		await mountResources(primaryPhp, args['mount-before-install'] || []);
@@ -339,9 +366,14 @@ export class PlaygroundCliBlueprintV2Worker extends PHPWorker {
 		siteUrl,
 		allow,
 		php,
+		createFiles,
+		constants,
+		phpIniEntries,
 		firstProcessId,
 		processIdSpaceLength,
 		trace,
+		nativeInternalDirPath,
+		withXdebug,
 	}: WorkerBootRequestHandlerOptions) {
 		if (this.booted) {
 			throw new Error('Playground already booted');
@@ -352,16 +384,9 @@ export class PlaygroundCliBlueprintV2Worker extends PHPWorker {
 		const lastProcessId = firstProcessId + processIdSpaceLength - 1;
 
 		try {
-			const constants: Record<string, string | number | boolean | null> =
-				{
-					WP_DEBUG: true,
-					WP_DEBUG_LOG: true,
-					WP_DEBUG_DISPLAY: false,
-				};
-
 			const requestHandler = await bootRequestHandler({
 				siteUrl,
-				createPhpRuntime: async () => {
+				createPhpRuntime: async (isPrimary) => {
 					const processId = nextProcessId;
 
 					if (nextProcessId < lastProcessId) {
@@ -379,19 +404,22 @@ export class PlaygroundCliBlueprintV2Worker extends PHPWorker {
 							ENV: {
 								DOCROOT: '/wordpress',
 							},
+							phpWasmInitOptions: isPrimary
+								? // Only pass a native /internal dir to the primary PHP process
+								  // because the secondary PHP process will proxy to it.
+								  {
+										nativeInternalDirPath,
+								  }
+								: {},
 						},
 						followSymlinks: allow?.includes('follow-symlinks'),
+						withXdebug,
 					});
 				},
 				sapiName: 'cli',
-				createFiles: {
-					'/internal/shared/ca-bundle.crt':
-						rootCertificates.join('\n'),
-				},
+				createFiles,
 				constants,
-				phpIniEntries: {
-					'openssl.cafile': '/internal/shared/ca-bundle.crt',
-				},
+				phpIniEntries,
 				cookieStore: false,
 				spawnHandler: sandboxedSpawnHandlerFactory,
 			});

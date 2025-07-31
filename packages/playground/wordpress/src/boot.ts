@@ -37,7 +37,7 @@ export interface Hooks {
 export type DatabaseType = 'sqlite' | 'mysql' | 'custom';
 
 export interface BootRequestHandlerOptions {
-	createPhpRuntime: () => Promise<number>;
+	createPhpRuntime: (isPrimary?: boolean) => Promise<number>;
 	onPHPInstanceCreated?: (php: PHP) => Promise<void>;
 	/**
 	 * PHP SAPI name to be returned by get_sapi_name(). Overriding
@@ -232,7 +232,8 @@ export async function bootRequestHandler(options: BootRequestHandlerOptions) {
 		requestHandler: PHPRequestHandler,
 		isPrimary: boolean
 	) {
-		const php = new PHP(await options.createPhpRuntime());
+		const runtimeId = await options.createPhpRuntime(isPrimary);
+		const php = new PHP(runtimeId);
 		if (options.sapiName) {
 			php.setSapiName(options.sapiName);
 		}
@@ -249,7 +250,7 @@ export async function bootRequestHandler(options: BootRequestHandlerOptions) {
 		php.defineConstant('WP_SQLITE_AST_DRIVER', true);
 
 		/**
-		 * Set up mu-plugins in /internal/shared/mu-plugins
+		 * Set up mu-plugins in /internal/mu-plugins
 		 * using auto_prepend_file to provide platform-level
 		 * customization without altering the installed WordPress
 		 * site.
@@ -271,8 +272,7 @@ export async function bootRequestHandler(options: BootRequestHandlerOptions) {
 			proxyFileSystem(await requestHandler.getPrimaryPhp(), php, [
 				'/tmp',
 				requestHandler.documentRoot,
-				'/internal/shared',
-				'/internal/symlinks',
+				'/internal',
 			]);
 		}
 

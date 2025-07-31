@@ -59,6 +59,18 @@ type PHPLoaderOptionsForNode = PHPLoaderOptions & {
 		 * @param args - Arguments to the format string.
 		 */
 		trace?: (processId: number, format: string, ...args: any[]) => void;
+
+		/**
+		 * An optional object to pass to the PHP-WASM library's `init` function.
+		 *
+		 * phpWasmInitOptions.nativeInternalDirPath is used to mount a
+		 * real, native directory as the php-wasm /internal directory.
+		 *
+		 * @see https://github.com/php-wasm/php-wasm/blob/main/compile/php/phpwasm-emscripten-library.js#L100
+		 */
+		phpWasmInitOptions?: {
+			nativeInternalDirPath?: string;
+		};
 	};
 };
 

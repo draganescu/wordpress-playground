@@ -8,7 +8,7 @@ import path from 'path';
 
 const dependencyFilename = path.join(__dirname, '8_0_30', 'php_8_0.wasm');
 export { dependencyFilename };
-export const dependenciesTotalSize = 31318489;
+export const dependenciesTotalSize = 31318473;
 const phpVersionString = '8.0.30';
 export function init(RuntimeName, PHPLoader) {
 	// The rest of the code comes from the built php.js file and esm-suffix.js
@@ -6691,7 +6691,7 @@ export function init(RuntimeName, PHPLoader) {
 		O_NONBLOCK: 2048,
 		POLLHUP: 16,
 		SETFL_MASK: 3072,
-		init: function () {
+		init: function (phpWasmInitOptions) {
 			Module['ENV'] = Module['ENV'] || {};
 			// Ensure a platform-level bin directory for a fallback `php` binary.
 			Module['ENV']['PATH'] = [
@@ -6701,28 +6701,48 @@ export function init(RuntimeName, PHPLoader) {
 				.filter(Boolean)
 				.join(':');
 
-			// The /internal directory is required by the C module. It's where the
+			// The /request directory is required by the C module. It's where the
 			// stdout, stderr, and headers information are written for the JavaScript
-			// code to read later on.
+			// code to read later on. This is per-request state that is isolated to a
+			// single PHP process.
+			FS.mkdir('/request');
+			// The /internal directory is shared amongst all PHP processes
+			// and contains wp-config.php, constants, etc.
 			FS.mkdir('/internal');
+
+			if (phpWasmInitOptions?.nativeInternalDirPath) {
+				FS.mount(
+					FS.filesystems.NODEFS,
+					{ root: phpWasmInitOptions.nativeInternalDirPath },
+					'/internal'
+				);
+			}
+
 			// The files from the shared directory are shared between all the
 			// PHP processes managed by PHPProcessManager.
-			FS.mkdir('/internal/shared');
+			FS.mkdirTree('/internal/shared');
+
 			// The files from the preload directory are preloaded using the
 			// auto_prepend_file php.ini directive.
-			FS.mkdir('/internal/shared/preload');
+			FS.mkdirTree('/internal/shared/preload');
 			// Platform-level bin directory for a fallback `php` binary. Without it,
 			// PHP may not populate the PHP_BINARY constant.
-			FS.mkdir('/internal/shared/bin');
+			FS.mkdirTree('/internal/shared/bin');
 			const originalOnRuntimeInitialized = Module['onRuntimeInitialized'];
 			Module['onRuntimeInitialized'] = () => {
-				// Dummy PHP binary for PHP to populate the PHP_BINARY constant.
-				FS.writeFile(
+				const { node: phpBinaryNode } = FS.lookupPath(
 					'/internal/shared/bin/php',
-					new TextEncoder().encode('#!/bin/sh\nphp "$@"')
+					{ noent_okay: true }
 				);
-				// It must be executable to be used by PHP.
-				FS.chmod('/internal/shared/bin/php', 0o755);
+				if (!phpBinaryNode) {
+					// Dummy PHP binary for PHP to populate the PHP_BINARY constant.
+					FS.writeFile(
+						'/internal/shared/bin/php',
+						new TextEncoder().encode('#!/bin/sh\nphp "$@"')
+					);
+					// It must be executable to be used by PHP.
+					FS.chmod('/internal/shared/bin/php', 0o755);
+				}
 				originalOnRuntimeInitialized();
 			};
 
@@ -6740,7 +6760,7 @@ export function init(RuntimeName, PHPLoader) {
 					return length;
 				},
 			});
-			FS.mkdev('/internal/stdout', FS.makedev(64, 0));
+			FS.mkdev('/request/stdout', FS.makedev(64, 0));
 
 			FS.registerDevice(FS.makedev(63, 0), {
 				open: () => {},
@@ -6752,7 +6772,7 @@ export function init(RuntimeName, PHPLoader) {
 					return length;
 				},
 			});
-			FS.mkdev('/internal/stderr', FS.makedev(63, 0));
+			FS.mkdev('/request/stderr', FS.makedev(63, 0));
 
 			FS.registerDevice(FS.makedev(62, 0), {
 				open: () => {},
@@ -6764,7 +6784,7 @@ export function init(RuntimeName, PHPLoader) {
 					return length;
 				},
 			});
-			FS.mkdev('/internal/headers', FS.makedev(62, 0));
+			FS.mkdev('/request/headers', FS.makedev(62, 0));
 
 			// Handle events.
 			PHPWASM.EventEmitter = ENVIRONMENT_IS_NODE
@@ -32034,7 +32054,7 @@ export function init(RuntimeName, PHPLoader) {
 	if (ENVIRONMENT_IS_NODE) {
 		NODEFS.staticInit();
 	}
-	PHPWASM.init();
+	PHPWASM.init(PHPLoader?.phpWasmInitOptions);
 
 	Module['requestAnimationFrame'] = MainLoop.requestAnimationFrame;
 	Module['pauseMainLoop'] = MainLoop.pause;
@@ -32100,13 +32120,13 @@ export function init(RuntimeName, PHPLoader) {
 	// End JS library code
 
 	var ASM_CONSTS = {
-		12160717: ($0) => {
+		12160701: ($0) => {
 			if (!$0) {
 				AL.alcErr = 0xa004;
 				return 1;
 			}
 		},
-		12160765: ($0) => {
+		12160749: ($0) => {
 			if (!AL.currentCtx) {
 				err('alGetProcAddress() called without a valid context');
 				return 1;

@@ -15,12 +15,8 @@ import type {
 	BlueprintDeclaration,
 } from '@wp-playground/blueprints';
 import { runBlueprintSteps } from '@wp-playground/blueprints';
-import {
-	RecommendedPHPVersion,
-	unzipFile,
-	zipDirectory,
-} from '@wp-playground/common';
-import fs from 'fs';
+import { RecommendedPHPVersion } from '@wp-playground/common';
+import fs, { mkdirSync } from 'fs';
 import type { Server } from 'http';
 import { MessageChannel as NodeMessageChannel, Worker } from 'worker_threads';
 // @ts-ignore
@@ -48,6 +44,11 @@ import { resolveBlueprint } from './resolve-blueprint';
 import { BlueprintsV2Handler } from './blueprints-v2/blueprints-v2-handler';
 import { BlueprintsV1Handler } from './blueprints-v1/blueprints-v1-handler';
 import { startBridge } from '@php-wasm/xdebug-bridge';
+import {
+	dir as tmpDir,
+	setGracefulCleanup as tmpSetGracefulCleanup,
+} from 'tmp-promise';
+import path from 'path';
 
 export const LogVerbosity = {
 	Quiet: { name: 'quiet', severity: LogSeverity.Fatal },
@@ -530,6 +531,51 @@ export async function runCLI(args: RunCLIArgs): Promise<RunCLIServer> {
 				Number.MAX_SAFE_INTEGER / totalWorkerCount
 			);
 
+			/*
+			 * Use a real temp dir as a target for Playground /wordpress and /internal paths
+			 * so that multiple worker threads can share the same files.
+			 * Sharing the same files leads to faster boot times and uses less memory
+			 * because we don't have to create or maintain multiple copies of the same files.
+			 */
+			// TODO: How can we name this to help cleanup when starting Playground CLI after a crash?
+			const nativeDirPath = (
+				await tmpDir({
+					/*
+					 * Remove the temp dir and all contents on process exit.
+					 *
+					 * NOTE: I worried about whether this cleanup would follow symlinks
+					 * and delete target files instead of unlinking the symlink,
+					 * but this feature uses rimraf under the hood which respects symlinks:
+					 * https://github.com/raszi/node-tmp/blob/3d2fe387f3f91b13830b9182faa02c3231ea8258/lib/tmp.js#L318
+					 */
+					unsafeCleanup: true,
+				})
+			).path;
+			// Request graceful cleanup on process exit.
+			tmpSetGracefulCleanup();
+
+			const nativeInternalDirPath = path.join(nativeDirPath, 'internal');
+			mkdirSync(nativeInternalDirPath);
+
+			if (args['mount-before-install'] === undefined) {
+				args['mount-before-install'] = [];
+			}
+			if (!args['mount-before-install'].some(isMountingWordPressDir)) {
+				// The user isn't mounting a real /wordpress directory,
+				// so we can create a real one in the temp directory.
+				const nativeWordPressDirPath = path.join(
+					nativeDirPath,
+					'wordpress'
+				);
+				mkdirSync(nativeWordPressDirPath);
+
+				// Make the real /wordpress mount first so any /wordpress subdirs are mounted into it.
+				args['mount-before-install'].unshift({
+					vfsPath: '/wordpress',
+					hostPath: nativeWordPressDirPath,
+				});
+			}
+
 			let handler: BlueprintsV1Handler | BlueprintsV2Handler;
 			if (args['experimental-blueprints-v2-runner']) {
 				handler = new BlueprintsV2Handler(args, {
@@ -587,7 +633,8 @@ export async function runCLI(args: RunCLIArgs): Promise<RunCLIServer> {
 				// Boot the primary worker using the handler
 				playground = await handler.bootPrimaryWorker(
 					initialWorker.phpPort,
-					fileLockManagerPort
+					fileLockManagerPort,
+					nativeInternalDirPath
 				);
 				playgroundsToCleanUp.push({
 					playground,
@@ -629,13 +676,6 @@ export async function runCLI(args: RunCLIArgs): Promise<RunCLIServer> {
 				) {
 					logger.log(`Preparing additional workers...`);
 
-					// Save /internal directory from initial worker so we can replicate it
-					// in each additional worker.
-					const internalZip = await zipDirectory(
-						playground,
-						'/internal'
-					);
-
 					// Boot additional workers using the handler
 					const initialWorkerProcessIdSpace = processIdSpaceLength;
 					await Promise.all(
@@ -652,6 +692,7 @@ export async function runCLI(args: RunCLIArgs): Promise<RunCLIServer> {
 									worker,
 									fileLockManagerPort,
 									firstProcessId,
+									nativeInternalDirPath,
 								});
 
 							playgroundsToCleanUp.push({
@@ -659,28 +700,14 @@ export async function runCLI(args: RunCLIArgs): Promise<RunCLIServer> {
 								worker: worker.worker,
 							});
 
-							// Replicate the Blueprint-initialized /internal directory
-							await additionalPlayground.writeFile(
-								'/tmp/internal.zip',
-								internalZip
-							);
-							await unzipFile(
-								additionalPlayground,
-								'/tmp/internal.zip',
-								'/internal'
-							);
-							await additionalPlayground.unlink(
-								'/tmp/internal.zip'
-							);
-
 							loadBalancer.addWorker(additionalPlayground);
 						})
 					);
-
-					logger.log(`Ready!`);
 				}
 
-				logger.log(`WordPress is running on ${serverUrl}`);
+				logger.log(
+					`WordPress is running on ${serverUrl} with ${totalWorkerCount} worker(s)`
+				);
 
 				if (args.experimentalDevtools && args.xdebug) {
 					const bridge = await startBridge({
@@ -862,4 +889,8 @@ async function zipSite(
 	});
 	const zip = await playground.readFileAsBuffer('/tmp/build.zip');
 	fs.writeFileSync(outfile, zip);
+}
+
+function isMountingWordPressDir(mount: Mount) {
+	return mount.vfsPath === '/wordpress';
 }
