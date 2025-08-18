@@ -33,7 +33,7 @@ export default defineConfig({
 				'ws',
 				'os',
 			],
-			input: 'packages/php-wasm/cli/src/main.ts',
+			input: 'packages/php-wasm/cli/src/cli.ts',
 			output: {
 				format: 'esm',
 				entryFileNames: '[name].js',

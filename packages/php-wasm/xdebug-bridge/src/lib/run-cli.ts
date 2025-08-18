@@ -23,18 +23,18 @@ Usage: xdebug-bridge [options]
 		.option('port', {
 			alias: 'p',
 			type: 'number',
-			description: 'Xdebug port to listen on',
+			describe: 'Xdebug port to listen on',
 			default: 9003,
 		})
 		.option('host', {
 			alias: 'h',
 			type: 'string',
-			description: 'Xdebug host to bind to',
+			describe: 'Xdebug host to bind to',
 			default: 'localhost',
 		})
 		.option('php-root', {
 			type: 'string',
-			description: 'Path to PHP root directory',
+			describe: 'Path to PHP root directory',
 			default: './',
 		})
 		.help()
@@ -49,7 +49,7 @@ Examples:
 		.parseSync() as CLIArgs;
 }
 
-export async function main(): Promise<void> {
+export async function parseOptionsAndRunCLI(): Promise<void> {
 	const args = parseCliArgs();
 
 	if (args.help) {
