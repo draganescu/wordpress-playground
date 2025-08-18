@@ -139,6 +139,11 @@ export class XdebugCDPBridge {
 		});
 	}
 
+	stop() {
+		this.dbgp.close();
+		this.cdp.close();
+	}
+
 	private sendInitialScripts() {
 		// Send scriptParsed for the main file if not already sent
 		if (
