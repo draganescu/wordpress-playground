@@ -1,7 +1,6 @@
 import esbuild from 'esbuild';
 import fs from 'fs';
 import path from 'path';
-import { createRequire } from 'module';
 
 try {
 	fs.mkdirSync('dist/packages/php-wasm/node', { recursive: true });

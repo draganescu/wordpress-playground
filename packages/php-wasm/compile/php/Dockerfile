@@ -45,6 +45,7 @@ COPY ./libsqlite3/ /root/builds/libsqlite3
 COPY ./libxml2/ /root/builds/libxml2
 COPY ./libz/ /root/builds/libz
 COPY ./oniguruma/ /root/builds/oniguruma
+COPY ./libintl/ /root/builds/libintl
 
 RUN if [ "$WITH_JSPI" = "yes" ]; then \
 	cp -r /root/builds/*/jspi/dist/root/lib/* /root/lib; \
@@ -69,6 +70,11 @@ RUN if [ "$WITH_JSPI" = "yes" ]; then \
 else \
 	cp -r /root/builds-libopenssl/asyncify/dist/root/lib /libs/libopenssl; \
 fi
+
+# Workaround to add ICU FLAGS to intl below 7.3 to inject -fPIC.
+RUN if [[ "${PHP_VERSION:0:1}" -eq "7" && "${PHP_VERSION:2:1}" -eq "2" ]]; then \
+		sed -i "s/\$ICU_INCS/\$ICU_INCS \$ICU_CFLAGS/" /root/php-src/ext/intl/config.m4; \
+	fi;
 
 # Workaround to unbundle sqlite from PHP <7.4.
 # Prior to 7.4, PHP bundled sqlite internally,
@@ -129,6 +135,7 @@ ARG OUTPUT_DIR_ON_HOST
 ARG WITH_DEBUG
 ARG DEBUG_DWARF_COMPILATION_DIR
 ARG WITH_WS_NETWORKING_PROXY
+ARG WITH_INTL
 
 # The platform to build for: web or node
 ARG EMSCRIPTEN_ENVIRONMENT=web
@@ -314,6 +321,26 @@ RUN if [ "$WITH_EXIF" = "yes" ]; \
 		echo -n ' --disable-exif ' >> /root/.php-configure-flags; \
 	fi;
 
+# Add intl if needed
+RUN if [ "$WITH_INTL" = "yes" ]; \
+	then \
+		if [ "${PHP_VERSION:0:1}" -eq "8" ] || [[ "${PHP_VERSION:0:1}" -eq "7" && "${PHP_VERSION:2:1}" -ge "2" ]]; then \
+			echo -n ' --enable-intl ' >> /root/.php-configure-flags; \
+			echo -n ' /root/lib/lib/libicudata.a /root/lib/lib/libicui18n.a /root/lib/lib/libicuio.a /root/lib/lib/libicutest.a /root/lib/lib/libicutu.a /root/lib/lib/libicuuc.a ' >> /root/.emcc-php-wasm-sources; \
+
+			if [[ "${PHP_VERSION:0:1}" -eq "7" && "${PHP_VERSION:2:1}" -le "3" ]]; then \
+				/root/replace.sh 's/UBool operator/bool operator/' /root/php-src/ext/intl/breakiterator/codepointiterator_internal.h; \
+				/root/replace.sh 's/UBool CodePointBreakIterator::operator/bool CodePointBreakIterator::operator/' /root/php-src/ext/intl/breakiterator/codepointiterator_internal.cpp; \
+				/root/replace.sh 's/ getArg/ phpGetArg/g; s/::getArg/::phpGetArg/g; s/ getMessage/ phpGetMessage/g; s/::getMessage/::phpGetMessage/g' /root/php-src/ext/intl/msgformat/msgformat_helpers.cpp; \
+			fi; \
+
+			if [[ "${PHP_VERSION:0:1}" -eq "7" && "${PHP_VERSION:2:1}" -eq "2" ]]; then \
+				files=( /root/php-src/ext/intl/collator/collator_sort.c /root/php-src/ext/intl/normalizer/normalizer_normalize.c /root/php-src/ext/intl/dateformat/dateformat_attr.c /root/php-src/ext/intl/timezone/timezone_class.cpp /root/php-src/ext/intl/timezone/timezone_methods.cpp /root/php-src/ext/intl/breakiterator/codepointiterator_internal.cpp ); \
+				for file in "${files[@]}"; do /root/replace.sh 's/\bFALSE\b/false/g; s/\bTRUE\b/true/g' "$file"; done; \
+			fi; \
+		fi; \
+	fi
+
 # Add mbregex if needed
 RUN if [ "$WITH_MBREGEX" = "yes" ] && [ "${PHP_VERSION:0:3}" != "7.0" ]; \
 	then \
@@ -344,6 +371,7 @@ RUN if [ "$WITH_MYSQL" = "yes" ]; then \
 # Build the patched PHP
 WORKDIR /root/php-src
 RUN source /root/emsdk/emsdk_env.sh && \
+ICU_CFLAGS="-D__x86_64__ -fPIC -I/root/lib/include" \
 CURL_CFLAGS="-I/root/lib/include" \
 WEBP_LIBS="-L/root/lib/lib" \
 WEBP_CFLAGS="-I/root/lib/include" \
@@ -2077,10 +2105,10 @@ RUN set -euxo pipefail; \
 	source /root/emsdk/emsdk_env.sh; \
 	if [ "$WITH_JSPI" = "yes" ]; then \
 		# Both imports and exports are required for inter-module communication with wrapped methods, e.g., wasm_recv.
-		export ASYNCIFY_FLAGS=" -s ASYNCIFY=2 -sSUPPORT_LONGJMP=wasm -fwasm-exceptions -sJSPI_IMPORTS=js_open_process,js_fd_read,js_waitpid,js_process_status,js_create_input_device,wasm_setsockopt,wasm_shutdown,wasm_close,wasm_recv,__syscall_fcntl64,js_flock,js_release_file_locks,js_waitpid,fd_close -sJSPI_EXPORTS=php_wasm_init,fd_close,wasm_sleep,wasm_read,emscripten_sleep,wasm_sapi_handle_request,wasm_sapi_request_shutdown,wasm_poll_socket,wrap_select,__wrap_select,select,php_pollfd_for,fflush,wasm_popen,wasm_read,wasm_php_exec,run_cli,wasm_recv -s EXTRA_EXPORTED_RUNTIME_METHODS=ccall,PROXYFS,wasmExports,_malloc "; \
+		export ASYNCIFY_FLAGS=" -s ASYNCIFY=2 -sSUPPORT_LONGJMP=wasm -fwasm-exceptions -sJSPI_IMPORTS=js_open_process,js_fd_read,js_waitpid,js_process_status,js_create_input_device,wasm_setsockopt,wasm_shutdown,wasm_close,wasm_recv,__syscall_fcntl64,js_flock,js_release_file_locks,js_waitpid,fd_close -sJSPI_EXPORTS=php_wasm_init,fd_close,wasm_sleep,wasm_read,emscripten_sleep,wasm_sapi_handle_request,wasm_sapi_request_shutdown,wasm_poll_socket,wrap_select,__wrap_select,select,php_pollfd_for,fflush,wasm_popen,wasm_read,wasm_php_exec,run_cli,wasm_recv -s EXTRA_EXPORTED_RUNTIME_METHODS=ccall,PROXYFS,wasmExports,_malloc,setErrNo "; \
 		echo '#define PLAYGROUND_JSPI 1' > /root/php_wasm_asyncify.h; \
 	else \
-		export ASYNCIFY_FLAGS=" -s ASYNCIFY=1 -s ASYNCIFY_IGNORE_INDIRECT=1 -s EXPORTED_RUNTIME_METHODS=ccall,PROXYFS,wasmExports $(cat /root/.emcc-php-asyncify-flags)  "; \
+		export ASYNCIFY_FLAGS=" -s ASYNCIFY=1 -s ASYNCIFY_IGNORE_INDIRECT=1 -s EXPORTED_RUNTIME_METHODS=ccall,PROXYFS,wasmExports,setErrNo $(cat /root/.emcc-php-asyncify-flags)  "; \
 		echo '' > /root/php_wasm_asyncify.h; \
 	fi; \
 	export EXPORTED_FUNCTIONS=$'["_exit", \n\
