@@ -89,6 +89,11 @@ export class XdebugCDPBridge {
 		// DevTools messages (requests)
 		this.cdp.on('message', (msg: any) => {
 			this.handleCdpMessage(msg);
+
+			if (msg.method === 'Network.enable') {
+				// Load known scripts
+				this.sendInitialScripts();
+			}
 		});
 
 		// DevTools disconnected
@@ -99,30 +104,6 @@ export class XdebugCDPBridge {
 				// After detach, Xdebug will likely close connection
 			}
 		});
-
-		// Load known scripts
-		this.sendInitialScripts();
-
-		// Opens Sources tab instead of Console by pausing the process
-		this.cdp.sendMessage({
-			method: 'Debugger.paused',
-			params: {
-				callFrames: [
-					{
-						location: {
-							scriptId: '1',
-							lineNumber: 0,
-						},
-						scopeChain: [],
-						this: { type: 'undefined' },
-					},
-				],
-				hitBreakpoints: [],
-			},
-		});
-
-		// And resuming the process
-		this.cdp.sendMessage({ method: 'Debugger.resumed' });
 
 		// Send a nice welcome message with instructions
 		this.cdp.sendMessage({
@@ -149,19 +130,159 @@ export class XdebugCDPBridge {
 		});
 	}
 
-	private sendInitialScripts() {
+	private openSourceTab() {
+		// Opens Sources tab instead of Console by pausing the process
+		this.cdp.sendMessage({
+			method: 'Debugger.paused',
+			params: {
+				callFrames: [
+					{
+						callFrameId: 'FRAME_1',
+						location: {
+							scriptId: '1',
+							lineNumber: 0,
+						},
+						scopeChain: [],
+						this: { type: 'undefined' },
+					},
+				],
+				hitBreakpoints: [],
+			},
+		});
+
+		// And resuming the process
+		this.cdp.sendMessage({ method: 'Debugger.resumed' });
+	}
+
+	private async sendInitialScripts() {
 		for (const [url, scriptId] of this.scriptIdByUrl.entries()) {
+			// Frame
 			this.cdp.sendMessage({
-				method: 'Debugger.scriptParsed',
+				method: 'Page.frameNavigated',
 				params: {
-					scriptId,
-					url: this.uriFromBridgeToCDP(url),
-					startLine: 0,
-					startColumn: 0,
-					executionContextId: 1,
+					frame: {
+						id: 'FRAME_1',
+						loaderId: 'LOADER_1',
+						url: 'file:///packages/php-wasm/xdebug-bridge/tests/fixtures/test.php',
+						mimeType: 'text/html',
+						securityOrigin: 'file://',
+						adFrameStatus: {},
+					},
 				},
 			});
+
+			// Execution context
+			this.cdp.sendMessage({
+				method: 'Runtime.executionContextCreated',
+				params: {
+					context: {
+						id: 1,
+						origin: 'file:///',
+						// name: "PHP Bridge",
+						name: 'file:///',
+						auxData: { frameId: 'FRAME_1' },
+					},
+				},
+			});
+
+			const url =
+				'file:///packages/php-wasm/xdebug-bridge/tests/fixtures/test.php';
+			const requestId =
+				'packages/php-wasm/xdebug-bridge/tests/fixtures/test.php';
+			const phpContent = await this.readPHPFile(requestId);
+
+			// Request
+			this.cdp.sendMessage({
+				method: 'Network.requestWillBeSent',
+				params: {
+					requestId,
+					loaderId: 'LOADER_1',
+					documentURL: url,
+					request: { url, method: 'GET', headers: {} },
+					timestamp: 0,
+					wallTime: 0,
+					initiator: { type: 'other' },
+					type: 'Document',
+					frameId: 'FRAME_1',
+				},
+			});
+
+			// Response
+			this.cdp.sendMessage({
+				method: 'Network.responseReceived',
+				params: {
+					requestId,
+					loaderId: 'LOADER_1',
+					timestamp: 0,
+					type: 'Document',
+					response: {
+						url,
+						status: 200,
+						statusText: 'OK',
+						mimeType: 'application/x-httpd-php',
+						headers: {},
+						connectionReused: false,
+						connectionId: 0,
+						encodedDataLength: phpContent.length,
+						fromDiskCache: false,
+						securityState: 'neutral',
+					},
+					frameId: 'FRAME_1',
+				},
+			});
+
+			// Loading finished
+			this.cdp.sendMessage({
+				method: 'Network.loadingFinished',
+				params: {
+					requestId,
+					timestamp: 0,
+					encodedDataLength: phpContent.length,
+				},
+			});
+
+			// this.cdp.sendMessage({
+			// method: 'Debugger.scriptParsed',
+			// params: {
+			// 	scriptId: '1',
+			// 	url: "file:///packages/php-wasm/xdebug-bridge/tests/fixtures/test.php",
+			// 	startLine: 0,
+			// 	startColumn: 0,
+			// 	endLine: 100,          // optional but recommended
+			// 	endColumn: 0,           // optional
+			// 	executionContextId: 1,  // must match a created runtime context
+			// 	frameId: "FRAME_1"      // must match Page.frameNavigated
+			// },
+			// });
+
+			// }
+
+			// for (const [url, scriptId] of this.scriptIdByUrl.entries()) {
+			// this.cdp.sendMessage({
+			// method: 'Debugger.scriptParsed',
+			// params: {
+			// scriptId,
+			// url: this.uriFromBridgeToCDP(url),
+			// startLine: 0,
+			// startColumn: 0,
+			// executionContextId: 1,
+			// frameId: "FRAME_1"
+			// },
+			// });
+			// this.cdp.sendMessage({
+			// 	method: 'Debugger.scriptParsed',
+			// 	params: {
+			// 		scriptId: '1',
+			// 		url: "file:///packages/php-wasm/xdebug-bridge/tests/fixtures/test.php",
+			// 		startLine: 0,
+			// 		startColumn: 0,
+			// 		executionContextId: 1,
+			// 		frameId: "FRAME_1"
+			// 	},
+			// });
 		}
+
+		this.openSourceTab();
 	}
 
 	private getOrCreateScriptId(fileUri: string): string {
@@ -416,6 +537,19 @@ export class XdebugCDPBridge {
 					scriptSource = await this.readPHPFile(uri);
 				}
 				result = { scriptSource };
+				break;
+			}
+			case 'Network.getResponseBody': {
+				const uri = params.requestId;
+				// const sid = params.requestId;
+				// const uri = [...this.scriptIdByUrl.entries()].find(
+				// 	([v,]) => v === sid
+				// )?.[0];
+				let body = '';
+				if (uri) {
+					body = await this.readPHPFile(uri);
+				}
+				result = { body };
 				break;
 			}
 			default:
