@@ -595,8 +595,6 @@ export class XdebugCDPBridge {
 				});
 			});
 
-			this.breakpoints;
-
 			const firstBreakTxn = this.breakOnFirstLine
 				? this.sendDbgpCommand('step_into')
 				: this.sendDbgpCommand('run');
@@ -621,7 +619,7 @@ export class XdebugCDPBridge {
 						pending.cdpMethod === 'Debugger.setBreakpointByUrl'
 					) {
 						// Map Xdebug breakpoint id to our cdp breakpoint id
-						const xdebugBpId = attrs.id;
+						// const xdebugBpId = attrs.id;
 						const bpInfo = pending.params;
 						if (bpInfo) {
 							const {
@@ -1052,45 +1050,45 @@ export class XdebugCDPBridge {
 						const callFrames: any[] = [];
 						this.callFramesMap.clear();
 						// Send scriptParsed for any new files in stack
-						for (const frame of stackEntries) {
-							const bridgeUri = this.uriFromDBGPToBridge(
-								frame.$.filename
-							);
-							const scriptId =
-								this.getOrCreateScriptId(bridgeUri);
-							// if (!this.scriptIdByUrl.has(bridgeUri)) {
-							// 	// Mark it known and send scriptParsed
-							// 	this.scriptIdByUrl.set(bridgeUri, scriptId);
-							// 	const phpContent = await this.readPHPFile(bridgeUri);
-							// 	this.cdp.sendMessage({
-							// 		method: "Debugger.scriptParsed",
-							// 		params: {
-							// 			scriptId: scriptId,
-							// 			url: this.uriFromBridgeToCDP(bridgeUri),
-							// 			startLine: 0,
-							// 			startColumn: 0,
-							// 			endLine: phpContent.split("\n").length,
-							// 			endColumn: 0,
-							// 			executionContextId: 1,
-							// 			isLiveEdit: false,
-							// 			sourceMapURL: "",
-							// 			hasSourceURL: true,
-							// 			length: phpContent.length
-							// 		}
-							// 	});
+						// for (const frame of stackEntries) {
+						// const bridgeUri = this.uriFromDBGPToBridge(
+						// 	frame.$.filename
+						// );
+						// const scriptId =
+						// 	this.getOrCreateScriptId(bridgeUri);
+						// if (!this.scriptIdByUrl.has(bridgeUri)) {
+						// 	// Mark it known and send scriptParsed
+						// 	this.scriptIdByUrl.set(bridgeUri, scriptId);
+						// 	const phpContent = await this.readPHPFile(bridgeUri);
+						// 	this.cdp.sendMessage({
+						// 		method: "Debugger.scriptParsed",
+						// 		params: {
+						// 			scriptId: scriptId,
+						// 			url: this.uriFromBridgeToCDP(bridgeUri),
+						// 			startLine: 0,
+						// 			startColumn: 0,
+						// 			endLine: phpContent.split("\n").length,
+						// 			endColumn: 0,
+						// 			executionContextId: 1,
+						// 			isLiveEdit: false,
+						// 			sourceMapURL: "",
+						// 			hasSourceURL: true,
+						// 			length: phpContent.length
+						// 		}
+						// 	});
 
-							// 	// this.cdp.sendMessage({
-							// 	// 	method: 'Debugger.scriptParsed',
-							// 	// 	params: {
-							// 	// 		scriptId: scriptId,
-							// 	// 		url: this.uriFromBridgeToCDP(bridgeUri),
-							// 	// 		startLine: 0,
-							// 	// 		startColumn: 0,
-							// 	// 		executionContextId: 1,
-							// 	// 	},
-							// 	// });
-							// }
-						}
+						// 	// this.cdp.sendMessage({
+						// 	// 	method: 'Debugger.scriptParsed',
+						// 	// 	params: {
+						// 	// 		scriptId: scriptId,
+						// 	// 		url: this.uriFromBridgeToCDP(bridgeUri),
+						// 	// 		startLine: 0,
+						// 	// 		startColumn: 0,
+						// 	// 		executionContextId: 1,
+						// 	// 	},
+						// 	// });
+						// }
+						// }
 						// Build callFrames array
 						for (const frame of stackEntries) {
 							const level = parseInt(frame.$.level, 10);
