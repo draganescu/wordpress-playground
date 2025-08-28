@@ -1,3 +1,4 @@
+import { logger } from '@php-wasm/logger';
 import type { PHP } from '@php-wasm/universal';
 import { readdirSync, readFileSync, lstatSync } from 'fs';
 import path from 'path';
@@ -10,9 +11,9 @@ export type StartBridgeConfig = {
 	cdpHost?: string;
 	dbgpPort?: number;
 	phpRoot?: string;
-
 	phpInstance?: PHP;
 	getPHPFile?: (path: string) => string | Promise<string>;
+	breakOnFirstLine?: boolean;
 };
 
 export async function startBridge(config: StartBridgeConfig) {
@@ -20,23 +21,27 @@ export async function startBridge(config: StartBridgeConfig) {
 	const dbgpPort = config.dbgpPort ?? 9003;
 	const cdpHost = config.cdpHost ?? 'localhost';
 	const phpRoot = config.phpRoot ?? process.cwd();
+	const breakOnFirstLine = config.breakOnFirstLine ?? false;
+
+	logger.log('Starting XDebug Bridge...');
 
 	// Entry point to start the service
 	const cdpServer = new CDPServer(cdpPort);
-	console.log('Connect Chrome DevTools to CDP at:');
 
-	console.log(
-		`devtools://devtools/bundled/inspector.html?ws=${cdpHost}:${cdpPort}`
+	logger.log('Connect Chrome DevTools to CDP at:');
+	logger.log(
+		`devtools://devtools/bundled/inspector.html?ws=${cdpHost}:${cdpPort}\n`
 	);
+
 	await new Promise((resolve) => cdpServer.on('clientConnected', resolve));
 	await new Promise((resolve) => setTimeout(resolve, 2000));
 
-	console.log('Chrome connected! Initializing Xdebug receiver...');
+	logger.log('Chrome connected! Initializing Xdebug receiver...');
 
 	const dbgpSession = new DbgpSession(dbgpPort);
 
-	console.log(`XDebug receiver running on port ${dbgpPort}`);
-	console.log('Running a PHP script with Xdebug enabled...');
+	logger.log(`XDebug receiver running on port ${dbgpPort}`);
+	logger.log('Running a PHP script with Xdebug enabled...');
 
 	// Recursively get a list of .php files in phpRoot
 	function getPhpFiles(dir: string): string[] {
@@ -66,5 +71,6 @@ export async function startBridge(config: StartBridgeConfig) {
 		knownScriptUrls: phpFiles,
 		phpRoot,
 		getPHPFile,
+		breakOnFirstLine,
 	});
 }
