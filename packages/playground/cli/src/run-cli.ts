@@ -49,6 +49,10 @@ import {
 	setGracefulCleanup as tmpSetGracefulCleanup,
 } from 'tmp-promise';
 import path from 'path';
+// NOTE: We use ps-man rather than more popular packages because there
+// is no native build required to install the package.
+// @ts-ignore -- There are no types for this package.
+import ps from 'ps-man';
 
 export const LogVerbosity = {
 	Quiet: { name: 'quiet', severity: LogSeverity.Fatal },
@@ -544,6 +548,7 @@ export async function runCLI(args: RunCLIArgs): Promise<RunCLIServer> {
 			// TODO: How can we name this to help cleanup when starting Playground CLI after a crash?
 			const nativeDirPath = (
 				await tmpDir({
+					prefix: generateTempDirPrefix(),
 					/*
 					 * Remove the temp dir and all contents on process exit.
 					 *
@@ -557,6 +562,13 @@ export async function runCLI(args: RunCLIArgs): Promise<RunCLIServer> {
 			).path;
 			// Request graceful cleanup on process exit.
 			tmpSetGracefulCleanup();
+
+			// We do not know the system temp dir,
+			// but we can try to infer from the location of the current temp dir.
+			const tempDirRoot = path.dirname(nativeDirPath);
+			// NOTE: This is an async operation, but we do not care to block on it.
+			// Let's let the cleanup happen as the main thread has time.
+			cleanupStalePlaygroundTempDirs(tempDirRoot);
 
 			// NOTE: We do not add mount declarations for /internal here
 			// because it will be mounted as part of php-wasm init.
@@ -919,4 +931,141 @@ function isMountingVfsDirName(dirName: string) {
 	return function matchesDirName(mount: Mount) {
 		return mount.vfsPath === `/${dirName}`;
 	};
+}
+
+const tempDirNameDelimiter = '-playground-cli-site-';
+
+function generateTempDirPrefix() {
+	const nodeBinaryName = path.basename(process.argv0);
+	const pid = process.pid;
+
+	// We place the binary name before the playground-related fragment
+	// so we can use the position of the fragment to parse the binary name.
+	// Otherwise, we would have to parse the binary name from the full path.
+	return `${nodeBinaryName}${tempDirNameDelimiter}${process.pid}-`;
+}
+
+function looksLikePlaygroundTempDirName(absolutePath: string) {
+	const dirName = path.basename(absolutePath);
+	return dirName.includes(tempDirNameDelimiter);
+}
+
+function parsePlaygroundTempDirName(absolutePath: string) {
+	const dirName = path.basename(absolutePath);
+	const match = dirName.match(
+		new RegExp(`^(.+)${tempDirNameDelimiter}(\\d+)-`)
+	);
+	if (!match) {
+		return null;
+	}
+	return {
+		absolutePath,
+		executableName: match[1],
+		pid: match[2],
+	};
+}
+
+async function cleanupStalePlaygroundTempDirs(tempRootDir: string) {
+	const stalePlaygroundTempDirs = await findStalePlaygroundTempDirs(
+		tempRootDir
+	);
+	for (const stalePlaygroundTempDir of stalePlaygroundTempDirs) {
+		fs.rm(stalePlaygroundTempDir, { recursive: true }, (err) => {
+			if (err) {
+				logger.warn(
+					`Failed to delete stale Playground temp dir: ${stalePlaygroundTempDir}`,
+					err
+				);
+			} else {
+				logger.info(
+					`Deleted stale Playground temp dir: ${stalePlaygroundTempDir}`
+				);
+			}
+		});
+	}
+}
+
+async function findStalePlaygroundTempDirs(tempRootDir: string) {
+	try {
+		const tempPaths = fs
+			.readdirSync(tempRootDir)
+			.map((dirName) => path.join(tempRootDir, dirName));
+
+		const stalePlaygroundTempDirs = [];
+		for (const tempPath of tempPaths) {
+			if (await appearsToBeStalePlaygroundTempDir(tempPath)) {
+				stalePlaygroundTempDirs.push(tempPath);
+			}
+		}
+		return stalePlaygroundTempDirs;
+	} catch (e) {
+		logger.warn(`Failed to find stale Playground temp dirs: ${e}`);
+		// Failing to find stale temp dirs should not prevent the CLI from starting.
+		return [];
+	}
+}
+
+async function appearsToBeStalePlaygroundTempDir(absolutePath: string) {
+	const lstat = fs.lstatSync(absolutePath);
+	if (!lstat.isDirectory()) {
+		// A non-directory cannot be a Playground temp dir.
+		return false;
+	}
+	if (!looksLikePlaygroundTempDirName(absolutePath)) {
+		// This doesn't look like one of our temp dirs.
+		return false;
+	}
+
+	const info = parsePlaygroundTempDirName(absolutePath);
+	if (!info) {
+		// We cannot parse the temp dir name,
+		// so there is nothing more to try.
+		return false;
+	}
+
+	if (await doesProcessExist(info.pid, info.executableName)) {
+		// It looks like the temp dir's process is still running.
+		return false;
+	}
+
+	const DAY_IN_MILLIS = 1000 * 60 * 60 * 24;
+	// TODO: How long should we wait before cleaning up a directory?
+	const ONE_DAY_AGO = Date.now() - DAY_IN_MILLIS;
+	const dirStat = fs.statSync(absolutePath);
+	if (dirStat.mtime.getTime() < ONE_DAY_AGO) {
+		return true;
+	}
+
+	return false;
+}
+
+async function doesProcessExist(pid: string, executableName: string) {
+	// Define this type because there are no types for ps.list()
+	type ProcessInfo = {
+		pid: string;
+		command: string;
+	};
+	// Look for an existing process with the same PID and executable name.
+	const [existingProcess] = await new Promise<ProcessInfo[]>(
+		(resolve, reject) => {
+			ps.list(
+				{
+					pid,
+					name: executableName,
+				},
+				(err: any, processes: ProcessInfo[]) => {
+					if (err) {
+						reject(err);
+					} else {
+						resolve(processes);
+					}
+				}
+			);
+		}
+	);
+	return (
+		!!existingProcess &&
+		existingProcess.pid === pid &&
+		existingProcess.command === executableName
+	);
 }
