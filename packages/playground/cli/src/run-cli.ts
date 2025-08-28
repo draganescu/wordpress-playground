@@ -532,8 +532,12 @@ export async function runCLI(args: RunCLIArgs): Promise<RunCLIServer> {
 			);
 
 			/*
-			 * Use a real temp dir as a target for Playground /wordpress and /internal paths
+			 * Use a real temp dir as a target for the following Playground paths
 			 * so that multiple worker threads can share the same files.
+			 *  - /internal
+			 *  - /tmp
+			 *  - /wordpress
+			 *
 			 * Sharing the same files leads to faster boot times and uses less memory
 			 * because we don't have to create or maintain multiple copies of the same files.
 			 */
@@ -554,26 +558,46 @@ export async function runCLI(args: RunCLIArgs): Promise<RunCLIServer> {
 			// Request graceful cleanup on process exit.
 			tmpSetGracefulCleanup();
 
+			// NOTE: We do not add mount declarations for /internal here
+			// because it will be mounted as part of php-wasm init.
 			const nativeInternalDirPath = path.join(nativeDirPath, 'internal');
 			mkdirSync(nativeInternalDirPath);
+
+			const userProvidableNativeSubdirs = [
+				'wordpress',
+				// Note: These dirs are from Emscripten's "default dirs" list:
+				// https://github.com/emscripten-core/emscripten/blob/f431ec220e472e1f8d3db6b52fe23fb377facf30/src/lib/libfs.js#L1400-L1402
+				//
+				// Any Playground process with multiple workers may assume
+				// these are part of a shared filesystem, so let's recognize
+				// them explicitly here.
+				'tmp',
+				'home',
+			];
 
 			if (args['mount-before-install'] === undefined) {
 				args['mount-before-install'] = [];
 			}
-			if (!args['mount-before-install'].some(isMountingWordPressDir)) {
-				// The user isn't mounting a real /wordpress directory,
-				// so we can create a real one in the temp directory.
-				const nativeWordPressDirPath = path.join(
-					nativeDirPath,
-					'wordpress'
-				);
-				mkdirSync(nativeWordPressDirPath);
 
-				// Make the real /wordpress mount first so any /wordpress subdirs are mounted into it.
-				args['mount-before-install'].unshift({
-					vfsPath: '/wordpress',
-					hostPath: nativeWordPressDirPath,
-				});
+			for (const subdirName of userProvidableNativeSubdirs) {
+				const thisSubdirDoesNotHaveAMount = !args[
+					'mount-before-install'
+				].some(isMountingVfsDirName(subdirName));
+				if (thisSubdirDoesNotHaveAMount) {
+					// The user isn't already mounting a native dir for this,
+					// so let's create a mount from within our native temp dir.
+					const nativeSubdirPath = path.join(
+						nativeDirPath,
+						subdirName
+					);
+					mkdirSync(nativeSubdirPath);
+
+					// Make the real mount first so any further subdirs are mounted into it.
+					args['mount-before-install'].unshift({
+						vfsPath: `/${subdirName}`,
+						hostPath: nativeSubdirPath,
+					});
+				}
 			}
 
 			let handler: BlueprintsV1Handler | BlueprintsV2Handler;
@@ -891,6 +915,8 @@ async function zipSite(
 	fs.writeFileSync(outfile, zip);
 }
 
-function isMountingWordPressDir(mount: Mount) {
-	return mount.vfsPath === '/wordpress';
+function isMountingVfsDirName(dirName: string) {
+	return function matchesDirName(mount: Mount) {
+		return mount.vfsPath === `/${dirName}`;
+	};
 }
