@@ -937,7 +937,6 @@ const tempDirNameDelimiter = '-playground-cli-site-';
 
 function generateTempDirPrefix() {
 	const nodeBinaryName = path.basename(process.argv0);
-	const pid = process.pid;
 
 	// We place the binary name before the playground-related fragment
 	// so we can use the position of the fragment to parse the binary name.
