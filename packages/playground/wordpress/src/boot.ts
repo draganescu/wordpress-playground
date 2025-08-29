@@ -10,6 +10,7 @@ import {
 	PHP,
 	PHPRequestHandler,
 	proxyFileSystem,
+	isPathToSharedFS,
 	rotatePHPRuntime,
 	sandboxedSpawnHandlerFactory,
 	setPhpIniEntries,
@@ -267,13 +268,23 @@ export async function bootRequestHandler(options: BootRequestHandlerOptions) {
 				joinPaths(new URL(options.siteUrl).pathname, 'phpinfo.php')
 			);
 		} else {
-			// Proxy the filesystem for all secondary PHP instances to
-			// the primary one.
-			proxyFileSystem(await requestHandler.getPrimaryPhp(), php, [
+			const pathsToShareBetweenPhpInstances = [
 				'/tmp',
 				requestHandler.documentRoot,
-				'/internal',
-			]);
+				'/internal/shared',
+				'/internal/symlinks',
+			];
+			const pathsToProxy = pathsToShareBetweenPhpInstances.filter(
+				(path) => !isPathToSharedFS(php, path)
+			);
+
+			// Proxy the filesystem for all secondary PHP instances to
+			// the primary one.
+			proxyFileSystem(
+				await requestHandler.getPrimaryPhp(),
+				php,
+				pathsToProxy
+			);
 		}
 
 		// Spawn handler is responsible for spawning processes for all the
