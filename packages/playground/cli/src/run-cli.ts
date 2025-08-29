@@ -587,14 +587,13 @@ export async function runCLI(args: RunCLIArgs): Promise<RunCLIServer> {
 				'home',
 			];
 
-			if (args['mount-before-install'] === undefined) {
-				args['mount-before-install'] = [];
-			}
-
 			for (const subdirName of userProvidableNativeSubdirs) {
-				const thisSubdirDoesNotHaveAMount = !args[
-					'mount-before-install'
-				].some(isMountingVfsDirName(subdirName));
+				const isMountingSubdirName = (mount: Mount) =>
+					mount.vfsPath === `/${subdirName}`;
+				const thisSubdirDoesNotHaveAMount = !(
+					args['mount-before-install']?.some(isMountingSubdirName) ||
+					args['mount']?.some(isMountingSubdirName)
+				);
 				if (thisSubdirDoesNotHaveAMount) {
 					// The user isn't already mounting a native dir for this,
 					// so let's create a mount from within our native temp dir.
@@ -603,6 +602,10 @@ export async function runCLI(args: RunCLIArgs): Promise<RunCLIServer> {
 						subdirName
 					);
 					mkdirSync(nativeSubdirPath);
+
+					if (args['mount-before-install'] === undefined) {
+						args['mount-before-install'] = [];
+					}
 
 					// Make the real mount first so any further subdirs are mounted into it.
 					args['mount-before-install'].unshift({
@@ -925,12 +928,6 @@ async function zipSite(
 	});
 	const zip = await playground.readFileAsBuffer('/tmp/build.zip');
 	fs.writeFileSync(outfile, zip);
-}
-
-function isMountingVfsDirName(dirName: string) {
-	return function matchesDirName(mount: Mount) {
-		return mount.vfsPath === `/${dirName}`;
-	};
 }
 
 const tempDirNameDelimiter = '-playground-cli-site-';

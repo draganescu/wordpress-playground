@@ -531,7 +531,7 @@ describe.each(blueprintVersions)(
 							'Running the Blueprint...',
 							'Finished running the blueprint',
 							expect.stringMatching(
-								/^WordPress is running on http:\/\/127\.0\.0\.1:\d+$/
+								/^WordPress is running on http:\/\/127\.0\.0\.1:\d+ with \d+ worker\(s\)$/
 							),
 						])
 					);
